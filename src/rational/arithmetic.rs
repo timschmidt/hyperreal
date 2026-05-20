@@ -1,4 +1,4 @@
-use crate::Problem;
+use crate::{Problem, Real};
 use crate::structural::{RationalFacts, RationalStorageClass};
 use num::bigint::Sign::{self, *};
 use num::{BigInt, BigUint, ToPrimitive};
@@ -1101,6 +1101,61 @@ impl Rational {
     pub fn abs(mut self) -> Self {
         if self.sign == Sign::Minus {
             self.sign = Sign::Plus;
+        }
+
+        self
+    }
+
+    /// Two-argument arctangent of `(self, x)`, returning the angle of the
+    /// point `(x, self)` in the principal range `(-pi, pi]` as a [`Real`].
+    ///
+    /// `self` is the `y` coordinate and `x` is the `x` coordinate, matching
+    /// the IEEE 754 `atan2(y, x)` convention. The result is irrational for
+    /// almost every rational input, so the return type widens to [`Real`].
+    /// This is a thin wrapper around [`Real::atan2`] that lifts both
+    /// rational coordinates into the symbolic real layer and inherits its
+    /// quadrant correction, exact-axis fast paths, and exact-special-form
+    /// recognition (for example `atan2(1, 1) = pi/4`).
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use hyperreal::{Rational, Real};
+    /// // atan2(1, 1) == pi / 4
+    /// assert_eq!(
+    ///     Rational::one().atan2(Rational::one()),
+    ///     (Real::pi() / Real::from(4_i32)).unwrap(),
+    /// );
+    /// // atan2(0, 0) == 0 by the f64::atan2 convention
+    /// assert_eq!(Rational::zero().atan2(Rational::zero()), Real::zero());
+    /// ```
+    pub fn atan2(self, x: Rational) -> Real {
+        Real::new(self).atan2(Real::new(x))
+    }
+
+    /// Returns a Rational with the magnitude of `self` and the sign of `from`.
+    ///
+    /// Mirrors the IEEE 754 `copysign` convention with one adjustment for the
+    /// unsigned-zero invariant of [`Rational`]: if either operand is zero the
+    /// result is `self` unchanged, since `Rational` does not carry a signed
+    /// zero. Otherwise the sign field of `self` is replaced by the sign of
+    /// `from`.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use hyperreal::Rational;
+    /// let magnitude = Rational::fraction(3, 4).unwrap();
+    /// let negative = Rational::fraction(-1, 2).unwrap();
+    /// assert_eq!(magnitude.clone().copysign(&negative), Rational::fraction(-3, 4).unwrap());
+    /// // Sign of zero is preserved (no signed zero in Rational).
+    /// assert_eq!(Rational::zero().copysign(&negative), Rational::zero());
+    /// // Copying the sign of zero leaves self unchanged.
+    /// assert_eq!(magnitude.clone().copysign(&Rational::zero()), magnitude);
+    /// ```
+    pub fn copysign(mut self, from: &Self) -> Self {
+        if !self.is_zero() && !from.is_zero() {
+            self.sign = from.sign;
         }
 
         self
@@ -2492,5 +2547,32 @@ mod tests {
         assert_eq!(&c - &a, Rational::new(4));
         assert_eq!(-&c, Rational::new(-6));
         assert_eq!(&a + &b, Rational::new(5));
+    }
+
+    #[test]
+    fn copysign_transfers_sign_of_nonzero_source() {
+        let pos = Rational::fraction(3, 4).unwrap();
+        let neg = Rational::fraction(-1, 2).unwrap();
+        assert_eq!(
+            pos.clone().copysign(&neg),
+            Rational::fraction(-3, 4).unwrap(),
+        );
+        assert_eq!(
+            neg.clone().copysign(&pos),
+            Rational::fraction(1, 2).unwrap(),
+        );
+        assert_eq!(pos.clone().copysign(&pos), pos);
+    }
+
+    #[test]
+    fn copysign_preserves_self_when_either_operand_is_zero() {
+        let pos = Rational::fraction(5, 7).unwrap();
+        let neg = Rational::fraction(-5, 7).unwrap();
+        // Zero magnitude stays zero regardless of source sign.
+        assert_eq!(Rational::zero().copysign(&neg), Rational::zero());
+        assert_eq!(Rational::zero().copysign(&pos), Rational::zero());
+        // Source is zero: self is returned unchanged (no signed zero).
+        assert_eq!(pos.clone().copysign(&Rational::zero()), pos);
+        assert_eq!(neg.clone().copysign(&Rational::zero()), neg);
     }
 }

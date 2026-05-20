@@ -1572,4 +1572,41 @@ mod tests {
             assert_ne!(sign, num::bigint::Sign::Minus);
         }
     }
+
+    #[test]
+    fn copysign_transfers_sign_of_nonzero_source() {
+        let pos = Real::new(Rational::fraction(7, 2).unwrap());
+        let neg = Real::new(Rational::fraction(-1, 3).unwrap());
+        assert_eq!(
+            pos.clone().copysign(&neg),
+            Real::new(Rational::fraction(-7, 2).unwrap()),
+        );
+        assert_eq!(
+            neg.clone().copysign(&pos),
+            Real::new(Rational::fraction(1, 3).unwrap()),
+        );
+        assert_eq!(pos.clone().copysign(&pos), pos);
+    }
+
+    #[test]
+    fn copysign_preserves_self_when_either_operand_is_zero() {
+        let pos = Real::new(Rational::fraction(5, 7).unwrap());
+        let neg = Real::new(Rational::fraction(-5, 7).unwrap());
+        // Zero magnitude stays zero regardless of source sign.
+        assert_eq!(Real::zero().copysign(&neg), Real::zero());
+        assert_eq!(Real::zero().copysign(&pos), Real::zero());
+        // Source is zero: self is returned unchanged (no signed zero in Real).
+        assert_eq!(pos.clone().copysign(&Real::zero()), pos);
+        assert_eq!(neg.clone().copysign(&Real::zero()), neg);
+    }
+
+    #[test]
+    fn copysign_transfers_sign_through_symbolic_pi_class() {
+        // pi is internally constructed positive; the rational scale carries any
+        // sign, so copysign should flip the overall Real sign exactly.
+        let positive_pi = Real::pi();
+        let negative_pi = -Real::pi();
+        assert_eq!(positive_pi.clone().copysign(&Real::from(-3_i32)), negative_pi);
+        assert_eq!(negative_pi.clone().copysign(&Real::from(2_i32)), positive_pi);
+    }
 }

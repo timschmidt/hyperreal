@@ -2340,6 +2340,45 @@ impl Real {
         }
     }
 
+    /// Returns a Real with the magnitude of `self` and the sign of `from`.
+    ///
+    /// Implemented by delegating to [`Rational::copysign`] on the rational
+    /// scale. Every internal symbolic class other than the opaque irrational
+    /// variant is constructed positive, so transferring the sign through the
+    /// rational scale is exact for those classes. Following the
+    /// [`Rational::copysign`] convention, zero is treated as unsigned: if
+    /// either `self` or `from` is zero on the rational scale the result is
+    /// `self` unchanged (no signed zero in [`Real`]).
+    ///
+    /// For an opaque irrational payload the sign of the underlying
+    /// [`Computable`] is unknown without refinement, so callers that need a
+    /// certified copy of the sign of `from` onto an opaque irrational should
+    /// first certify both signs with [`Real::best_sign`] (or a
+    /// precision-driven sign refinement) and negate explicitly when needed.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use hyperreal::{Rational, Real};
+    /// let magnitude = Real::new(Rational::fraction(7, 2).unwrap());
+    /// let negative = Real::new(Rational::fraction(-1, 3).unwrap());
+    /// assert_eq!(
+    ///     magnitude.clone().copysign(&negative),
+    ///     Real::new(Rational::fraction(-7, 2).unwrap()),
+    /// );
+    /// // Zero stays zero regardless of the source sign.
+    /// assert_eq!(Real::zero().copysign(&negative), Real::zero());
+    /// ```
+    pub fn copysign(self, from: &Self) -> Self {
+        Self {
+            rational: self.rational.copysign(&from.rational),
+            class: self.class,
+            computable: self.computable,
+            signal: self.signal,
+            primitive_approx_cache: Cell::new(PrimitiveApproxCache::Empty),
+        }
+    }
+
     /// Our best attempt to discern the [`Sign`] of this Real.
     /// This will be accurate for trivial Rationals and many but not all other cases.
     pub fn best_sign(&self) -> Sign {

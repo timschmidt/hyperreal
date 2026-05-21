@@ -722,3 +722,32 @@ Owned versus borrowed arithmetic for symbolic irrational `Real` values.
 | `real_irrational_ops/div_refs` | not run | not run | Divides borrowed operands. |
 
 <!-- END borrowed_ops -->
+
+<!-- BEGIN angle_conversion -->
+## `angle_conversion`
+
+Microbenchmarks for radian/degree conversion across symbolic classes.
+
+### `angle_conversion`
+
+Cost of `Real::to_degrees` and `Real::to_radians` across common symbolic classes.
+
+| Benchmark output | Mean | 95% CI | What it measures |
+| --- | ---: | ---: | --- |
+| `angle_conversion/to_degrees_pi` | 304.48 ns | 291.70 ns - 318.45 ns | Converts pi radians to degrees (180). Class::Pi input — pi-cancellation fast path candidate. |
+| `angle_conversion/to_degrees_tau` | 326.53 ns | 301.25 ns - 354.19 ns | Converts 2*pi radians to degrees (360). Class::Pi input with rational scale 2. |
+| `angle_conversion/to_degrees_half_pi` | 283.41 ns | 263.85 ns - 310.30 ns | Converts pi/2 radians to degrees (90). Class::Pi input with fractional rational scale. |
+| `angle_conversion/to_degrees_rational_one` | 680.23 ns | 673.74 ns - 687.50 ns | Converts 1 radian to degrees (180/pi). Class::One input — no pi cancellation. |
+| `angle_conversion/to_radians_180` | 233.31 ns | 231.25 ns - 235.36 ns | Converts 180 degrees to radians (pi). Class::One input — pi-attach fast path candidate. |
+| `angle_conversion/to_radians_360` | 236.37 ns | 234.20 ns - 238.67 ns | Converts 360 degrees to radians (2*pi). Class::One input with larger rational. |
+| `angle_conversion/to_radians_90` | 248.10 ns | 243.24 ns - 253.76 ns | Converts 90 degrees to radians (pi/2). Class::One input with non-multiple scale. |
+| `angle_conversion/to_radians_pi` | 921.47 ns | 884.19 ns - 968.31 ns | Converts pi degrees to radians (pi^2/180). Class::Pi input — uncommon path. |
+| `angle_conversion/to_degrees_negative_one` | not run | not run | Converts -1 radian to degrees. Class::One negative — fallback path. |
+| `angle_conversion/to_degrees_sqrt_two` | not run | not run | Converts sqrt(2) radians to degrees. Class::Sqrt — fully generic dispatch. |
+| `angle_conversion/to_degrees_e` | not run | not run | Converts e radians to degrees. Class::Exp(1) — fully generic dispatch. |
+| `angle_conversion/to_radians_negative_pi` | not run | not run | Converts -pi degrees to radians. Class::Pi negative — fallback path. |
+| `angle_conversion/to_radians_sqrt_two` | not run | not run | Converts sqrt(2) degrees to radians. Class::Sqrt — fully generic dispatch. |
+| `angle_conversion/to_radians_e` | not run | not run | Converts e degrees to radians. Class::Exp(1) — fully generic dispatch. |
+
+<!-- END angle_conversion -->
+

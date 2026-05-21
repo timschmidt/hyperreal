@@ -53,3 +53,5 @@ mod problem;
 pub use crate::problem::Problem;
 
 mod serde;
+
+pub use num::bigint::Sign;

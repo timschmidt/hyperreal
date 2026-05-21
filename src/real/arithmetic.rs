@@ -1115,6 +1115,19 @@ fn sin_pi_neg(r: Rational) -> bool {
     r.shifted_big_integer(0).bit(0)
 }
 
+/// Update a cache with a function
+macro_rules! map_cache {
+    ($cache:expr, $map_fn:expr) => {
+        $cache.update(|ac| match ac {
+            #[cfg(feature = "cached-f32-approx")]
+            $crate::real::PrimitiveApproxCache::F32(f) => $crate::real::PrimitiveApproxCache::F32(f.map(|f| $map_fn(f))),
+            #[cfg(feature = "cached-f64-approx")]
+            $crate::real::PrimitiveApproxCache::F64(f) => $crate::real::PrimitiveApproxCache::F64(f.map(|f| $map_fn(f))),
+            _ => $crate::real::PrimitiveApproxCache::Empty,
+        });
+    };
+}
+
 impl Real {
     #[inline]
     fn has_zero_scale(&self) -> bool {
@@ -2310,12 +2323,99 @@ impl Real {
         /* ... TODO add more cases which definitely aren't equal */
     }
 
-    /// The absolute value of this Real.
+    /// The smallest integer greater than or equal to `self`.
     ///
-    /// Implemented by abs'ing the [`Rational`] scale via [`Rational::abs`].
-    /// Every internal symbolic class other than the opaque irrational variant
-    /// is constructed positive, so flipping the sign on the rational scale is
-    /// sufficient to reflect the value into the non-negative half-line.
+    /// Implemented by delegating to [`Rational::ceil`] on the rational scale.
+    /// This is exact when the [`Real`] is purely rational ([`Real::is_rational`]
+    /// returns true), in which case the result is again a rational integer
+    /// [`Real`].
+    ///
+    /// For a non-rational [`Real`] (any non-[`Class::One`] internal class such
+    /// as `pi`, `sqrt`, `ln`, …) the symbolic factor is preserved and only the
+    /// rational scale in front of it is rounded up. The intended use is on
+    /// reals known to be rational; callers wanting an integer ceiling of an
+    /// irrational value should refine via approximation instead.
+    ///
+    /// Negative non-integer rational reals round toward zero (i.e. up), and a
+    /// magnitude under one collapses to [`Real::zero`] by the same
+    /// unsigned-zero rule used by [`Rational::ceil`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use hyperreal::{Rational, Real};
+    /// // 22/7 → 4
+    /// let approx_pi = Real::new(Rational::fraction(22, 7).unwrap());
+    /// assert_eq!(approx_pi.ceil(), Real::from(4_i32));
+    /// // -3/2 → -1 (toward zero)
+    /// let negative = Real::new(Rational::fraction(-3, 2).unwrap());
+    /// assert_eq!(negative.ceil(), Real::from(-1_i32));
+    /// // Integers and zero are unchanged.
+    /// assert_eq!(Real::from(-3_i32).ceil(), Real::from(-3_i32));
+    /// assert_eq!(Real::zero().ceil(), Real::zero());
+    /// ```
+    pub fn ceil(mut self) -> Self {
+        self.rational = self.rational.ceil();
+
+        map_cache!(self.primitive_approx_cache, num::Float::ceil);
+
+        self
+    }
+
+    /// The integer part of `self`, truncated toward zero.
+    ///
+    /// Implemented by delegating to [`Rational::trunc`] on the rational scale.
+    /// This is exact when the [`Real`] is purely rational ([`Real::is_rational`]
+    /// returns true), in which case the result is again a rational integer
+    /// [`Real`] sharing the sign of `self` (zero is unsigned).
+    ///
+    /// For a non-rational [`Real`] (any non-[`Class::One`] internal class such
+    /// as `pi`, `sqrt`, `ln`, …) the symbolic factor is preserved and only the
+    /// rational scale in front of it is truncated. The intended use is on
+    /// reals known to be rational; callers wanting an integer truncation of an
+    /// irrational value should refine via approximation instead.
+    ///
+    /// Pair with [`Real::ceil`] for rounding away from zero on positive
+    /// non-integer rationals.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use hyperreal::{Rational, Real};
+    /// // 22/7 → 3
+    /// let approx_pi = Real::new(Rational::fraction(22, 7).unwrap());
+    /// assert_eq!(approx_pi.trunc(), Real::from(3_i32));
+    /// // -22/7 → -3 (toward zero, not -4)
+    /// let negative = Real::new(Rational::fraction(-22, 7).unwrap());
+    /// assert_eq!(negative.trunc(), Real::from(-3_i32));
+    /// // Magnitude under one collapses to zero.
+    /// let small = Real::new(Rational::fraction(-1, 2).unwrap());
+    /// assert_eq!(small.trunc(), Real::zero());
+    /// // Integers and zero are unchanged.
+    /// assert_eq!(Real::from(7_i32).trunc(), Real::from(7_i32));
+    /// assert_eq!(Real::zero().trunc(), Real::zero());
+    /// ```
+    pub fn trunc(&self) -> Self {
+        use PrimitiveApproxCache::*;
+
+        // ? do computable need to be run first
+        Self {
+            rational: self.rational.trunc(),
+            // it's over one (int) and rational
+            class: Class::One,
+            computable: None,
+            signal: None,
+            primitive_approx_cache: Cell::new(match self.primitive_approx_cache.get() {
+                #[cfg(feature = "cached-f32-approx")]
+                F32(f) => F32(f.map(|f| f.trunc())), 
+                #[cfg(feature = "cached-f64-approx")]
+                F64(f) => F64(f.map(|f| f.trunc())),
+                _ => Empty,
+            }),
+        }
+    }
+
+    /// The absolute value of this Real.
     ///
     /// For an opaque irrational payload the sign of the underlying
     /// [`Computable`] is unknown without refinement, so callers that need a
@@ -2332,14 +2432,12 @@ impl Real {
     /// assert_eq!(negative.abs(), positive);
     /// assert_eq!(Real::zero().abs(), Real::zero());
     /// ```
-    pub fn abs(self) -> Self {
-        Self {
-            rational: self.rational.abs(),
-            class: self.class,
-            computable: self.computable,
-            signal: self.signal,
-            primitive_approx_cache: Cell::new(PrimitiveApproxCache::Empty),
-        }
+    pub fn abs(mut self) -> Self {
+        self.rational = self.rational.abs();
+
+        map_cache!(self.primitive_approx_cache, num::Float::abs);
+
+        self
     }
 
     /// Returns a Real with the magnitude of `self` and the sign of `from`.
@@ -4704,6 +4802,68 @@ impl Real {
             primitive_approx_cache: Cell::new(PrimitiveApproxCache::Empty),
         })
     }
+
+    /// Converts radians to degrees.
+    ///
+    /// `self` is interpreted as an angle in radians; the result is the same
+    /// angle expressed in degrees, computed exactly as `self * 180 / pi`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use hyperreal::Real;
+    ///
+    /// assert_eq!(Real::pi().to_degrees(), Real::from(180_i32));
+    /// assert_eq!(Real::tau().to_degrees(), Real::from(360_i32));
+    /// assert_eq!(Real::zero().to_degrees(), Real::zero());
+    /// ```
+    pub fn to_degrees(mut self) -> Self {
+        if self.rational.sign() == Sign::NoSign {
+            return self;
+        }
+        if self.class == Pi {
+            // pi cancels analytically: (rational * pi * 180) / pi == rational * 180.
+            // Skip the full Real::Div dispatch and emit a Class::One result directly.
+            self.rational.numerator *= BigUint::from(180u64);
+            self.class = One;
+            self.computable = None;
+            self.signal = None;
+            self.primitive_approx_cache = Cell::new(PrimitiveApproxCache::Empty);
+            return self;
+        }
+        self.rational.numerator *= BigUint::from(180u64);
+        (self / Real::pi()).unwrap(/* pi is not 0 */)
+    }
+
+    /// Converts degrees to radians.
+    ///
+    /// `self` is interpreted as an angle in degrees; the result is the same
+    /// angle expressed in radians, computed exactly as `self * pi / 180`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use hyperreal::Real;
+    ///
+    /// assert_eq!(Real::from(180_i32).to_radians(), Real::pi());
+    /// assert_eq!(Real::from(360_i32).to_radians(), Real::tau());
+    /// assert_eq!(Real::zero().to_radians(), Real::zero());
+    /// ```
+    pub fn to_radians(mut self) -> Self {
+        if self.rational.sign() == Sign::NoSign {
+            return self;
+        }
+        if self.class == One {
+            // Attach Class::Pi directly instead of dispatching through Mul.
+            self.rational.denominator *= BigUint::from(180u64);
+            self.class = Pi;
+            self.computable = Some(Computable::pi());
+            self.primitive_approx_cache = Cell::new(PrimitiveApproxCache::Empty);
+            return self;
+        }
+        self.rational.denominator *= BigUint::from(180u64);
+        self * Real::pi()
+    }
 }
 
 impl<T: AsRef<Real>> Add<T> for &Real {
@@ -5788,6 +5948,38 @@ impl<T: AsRef<Real>> Div<T> for Real {
 
     fn div(self, other: T) -> Self::Output {
         &self / other.as_ref()
+    }
+}
+
+impl Rem for &Real {
+    type Output = Result<Real, Problem>;
+
+    fn rem(self, rhs: Self) -> Self::Output {
+        if self.is_rational() && rhs.is_rational() {
+            return (&self.rational % &rhs.rational).map(Real::new);
+        }
+        if rhs.has_zero_scale() {
+            return Err(Problem::DivideByZero);
+        }
+        if self.has_zero_scale() {
+            return Ok(Real::zero());
+        }
+        // Only exact when the quotient collapses to a rational (e.g. same
+        // symbolic class on both sides), since `Real::trunc` only truncates
+        // the rational scale.
+        let quotient = (self / rhs)?;
+        if !quotient.is_rational() {
+            return Err(Problem::NotANumber);
+        }
+        Ok(self - quotient.trunc() * rhs)
+    }
+}
+
+impl<T: AsRef<Real>> Rem<T> for Real {
+    type Output = Result<Self, Problem>;
+
+    fn rem(self, rhs: T) -> Self::Output {
+        &self % rhs.as_ref()
     }
 }
 

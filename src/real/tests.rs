@@ -1574,6 +1574,170 @@ mod tests {
     }
 
     #[test]
+    fn atan2_origin_returns_zero() {
+        assert_eq!(Real::zero().atan2(Real::zero()), Real::zero());
+    }
+
+    #[test]
+    fn atan2_positive_x_axis_is_zero() {
+        assert_eq!(Real::zero().atan2(Real::from(3_i32)), Real::zero());
+    }
+
+    #[test]
+    fn atan2_negative_x_axis_is_pi() {
+        assert_eq!(Real::zero().atan2(Real::from(-5_i32)), Real::pi());
+    }
+
+    #[test]
+    fn atan2_positive_y_axis_is_half_pi() {
+        assert_eq!(
+            Real::from(7_i32).atan2(Real::zero()),
+            (Real::pi() / Real::from(2_i32)).unwrap(),
+        );
+    }
+
+    #[test]
+    fn atan2_negative_y_axis_is_minus_half_pi() {
+        assert_eq!(
+            Real::from(-9_i32).atan2(Real::zero()),
+            -(Real::pi() / Real::from(2_i32)).unwrap(),
+        );
+    }
+
+    #[test]
+    fn atan2_quadrant_one_uses_atan_special_form() {
+        // atan2(1, 1) = pi/4 exactly via Real::atan's exact special form.
+        assert_eq!(
+            Real::one().atan2(Real::one()),
+            (Real::pi() / Real::from(4_i32)).unwrap(),
+        );
+    }
+
+    #[test]
+    fn atan2_quadrant_two_uses_atan_plus_pi() {
+        assert_eq!(
+            Real::one().atan2(-Real::one()),
+            Real::pi() * Real::new(Rational::fraction(3, 4).unwrap()),
+        );
+    }
+
+    #[test]
+    fn atan2_quadrant_three_uses_atan_minus_pi() {
+        assert_eq!(
+            (-Real::one()).atan2(-Real::one()),
+            Real::pi() * Real::new(Rational::fraction(-3, 4).unwrap()),
+        );
+    }
+
+    #[test]
+    fn atan2_quadrant_four_uses_negative_atan() {
+        assert_eq!(
+            (-Real::one()).atan2(Real::one()),
+            (Real::pi() / Real::from(-4_i32)).unwrap(),
+        );
+    }
+
+    #[test]
+    fn atan2_sqrt_three_anchor_matches_pi_third() {
+        // atan2(sqrt(3), 1) = pi/3 exactly via Real::atan's sqrt(3) anchor.
+        let sqrt_three = Real::from(3_i32).sqrt().unwrap();
+        assert_eq!(
+            sqrt_three.atan2(Real::one()),
+            (Real::pi() / Real::from(3_i32)).unwrap(),
+        );
+    }
+
+    #[test]
+    fn atan2_generic_quadrants_match_f64() {
+        let cases: [(f64, f64); 8] = [
+            (3.0, 4.0),
+            (-3.0, 4.0),
+            (3.0, -4.0),
+            (-3.0, -4.0),
+            (1.0, 2.0),
+            (-1.0, 2.0),
+            (1.0, -2.0),
+            (-1.0, -2.0),
+        ];
+        for (y, x) in cases {
+            let y_real = Real::new(Rational::fraction(y as i64, 1).unwrap());
+            let x_real = Real::new(Rational::fraction(x as i64, 1).unwrap());
+            let got: f64 = y_real.atan2(x_real).into();
+            let want = y.atan2(x);
+            assert!(
+                (got - want).abs() < 1e-12,
+                "atan2({y}, {x}): got {got}, want {want}",
+            );
+        }
+    }
+
+    #[test]
+    fn atan2_is_consistent_under_uniform_positive_scaling() {
+        // atan2(ky, kx) = atan2(y, x) for k > 0. Use rational coords with a
+        // generic ratio so the f64 image distinguishes the four quadrants.
+        let y = Real::new(Rational::fraction(5, 2).unwrap());
+        let x = Real::new(Rational::fraction(-7, 3).unwrap());
+        let scale = Real::from(11_i32);
+        let unscaled: f64 = y.clone().atan2(x.clone()).into();
+        let scaled: f64 = (y * scale.clone()).atan2(x * scale).into();
+        assert!((unscaled - scaled).abs() < 1e-12);
+    }
+
+    #[test]
+    fn rational_atan2_axes_and_origin() {
+        assert_eq!(Rational::zero().atan2(Rational::zero()), Real::zero());
+        assert_eq!(Rational::zero().atan2(Rational::new(2)), Real::zero());
+        assert_eq!(Rational::zero().atan2(Rational::new(-2)), Real::pi());
+        assert_eq!(
+            Rational::new(4).atan2(Rational::zero()),
+            (Real::pi() / Real::from(2_i32)).unwrap(),
+        );
+    }
+
+    #[test]
+    fn rational_atan2_unit_diagonal_is_pi_quarter() {
+        assert_eq!(
+            Rational::one().atan2(Rational::one()),
+            (Real::pi() / Real::from(4_i32)).unwrap(),
+        );
+    }
+
+    #[test]
+    fn computable_atan2_axes() {
+        use crate::Computable;
+        use num::Zero;
+        // compare_to(&equal) on Computable can loop forever (kernel docs warn
+        // about this), so axis cases are validated through approx values.
+        let zero_plus = Computable::zero().atan2(Computable::one());
+        assert!(zero_plus.approx(-30).is_zero());
+        let zero_minus = Computable::zero().atan2(Computable::one().negate());
+        assert_eq!(zero_minus.approx(-30), Computable::pi().approx(-30));
+        let plus_y = Computable::one().atan2(Computable::zero());
+        let half_pi = Computable::pi()
+            .multiply(Computable::one().add(Computable::one()).inverse());
+        assert_eq!(plus_y.approx(-30), half_pi.approx(-30));
+    }
+
+    #[test]
+    fn computable_atan2_quadrants_match_f64() {
+        use crate::Computable;
+        use num::ToPrimitive;
+        let cases: [(i64, i64); 4] = [(3, 4), (-3, 4), (3, -4), (-3, -4)];
+        for (y, x) in cases {
+            let y_c = Computable::rational(Rational::new(y));
+            let x_c = Computable::rational(Rational::new(x));
+            // approx returns a BigInt scaled by 2^p; using p=-60 buys ~18 decimal digits.
+            let scaled = y_c.atan2(x_c).approx(-60);
+            let got_f = scaled.to_f64().expect("BigInt fits in f64") * 2_f64.powi(-60);
+            let want = (y as f64).atan2(x as f64);
+            assert!(
+                (got_f - want).abs() < 1e-12,
+                "computable atan2({y}, {x}): got {got_f}, want {want}",
+            );
+        }
+    }
+
+    #[test]
     fn copysign_transfers_sign_of_nonzero_source() {
         let pos = Real::new(Rational::fraction(7, 2).unwrap());
         let neg = Real::new(Rational::fraction(-1, 3).unwrap());
@@ -1608,5 +1772,266 @@ mod tests {
         let negative_pi = -Real::pi();
         assert_eq!(positive_pi.clone().copysign(&Real::from(-3_i32)), negative_pi);
         assert_eq!(negative_pi.clone().copysign(&Real::from(2_i32)), positive_pi);
+    }
+
+    #[test]
+    fn ceil_rounds_positive_rational_up() {
+        let approx_pi = Real::new(Rational::fraction(22, 7).unwrap());
+        assert_eq!(approx_pi.ceil(), Real::from(4_i32));
+        let quarter = Real::new(Rational::fraction(1, 4).unwrap());
+        assert_eq!(quarter.ceil(), Real::from(1_i32));
+    }
+
+    #[test]
+    fn ceil_rounds_negative_rational_toward_zero() {
+        // ceil(-3/2) = -1, not -2.
+        let neg = Real::new(Rational::fraction(-3, 2).unwrap());
+        assert_eq!(neg.ceil(), Real::from(-1_i32));
+        let neg_big = Real::new(Rational::fraction(-22, 7).unwrap());
+        assert_eq!(neg_big.ceil(), Real::from(-3_i32));
+    }
+
+    #[test]
+    fn ceil_collapses_negative_under_one_to_zero() {
+        let small = Real::new(Rational::fraction(-1, 2).unwrap());
+        assert_eq!(small.ceil(), Real::zero());
+    }
+
+    #[test]
+    fn ceil_preserves_integers_and_zero() {
+        assert_eq!(Real::from(5_i32).ceil(), Real::from(5_i32));
+        assert_eq!(Real::from(-3_i32).ceil(), Real::from(-3_i32));
+        assert_eq!(Real::zero().ceil(), Real::zero());
+    }
+
+    #[test]
+    fn trunc_rounds_positive_rational_toward_zero() {
+        let approx_pi = Real::new(Rational::fraction(22, 7).unwrap());
+        assert_eq!(approx_pi.trunc(), Real::from(3_i32));
+        let quarter = Real::new(Rational::fraction(1, 4).unwrap());
+        assert_eq!(quarter.trunc(), Real::zero());
+    }
+
+    #[test]
+    fn trunc_rounds_negative_rational_toward_zero() {
+        let neg = Real::new(Rational::fraction(-22, 7).unwrap());
+        assert_eq!(neg.trunc(), Real::from(-3_i32));
+        let neg_small = Real::new(Rational::fraction(-1, 2).unwrap());
+        assert_eq!(neg_small.trunc(), Real::zero());
+    }
+
+    #[test]
+    fn trunc_preserves_integers_and_zero() {
+        assert_eq!(Real::from(7_i32).trunc(), Real::from(7_i32));
+        assert_eq!(Real::from(-4_i32).trunc(), Real::from(-4_i32));
+        assert_eq!(Real::zero().trunc(), Real::zero());
+    }
+
+    #[test]
+    fn rem_integers() {
+        let seven = Real::from(7_i32);
+        let three = Real::from(3_i32);
+        assert_eq!((&seven % &three).unwrap(), Real::from(1_i32));
+        let twelve = Real::from(12_i32);
+        let four = Real::from(4_i32);
+        assert_eq!((&twelve % &four).unwrap(), Real::zero());
+    }
+
+    #[test]
+    fn rem_sign_follows_dividend() {
+        let three = Real::from(3_i32);
+        let pos = Real::from(7_i32);
+        let neg = Real::from(-7_i32);
+        assert_eq!((&pos % &three).unwrap(), Real::from(1_i32));
+        assert_eq!((&neg % &three).unwrap(), Real::from(-1_i32));
+        let minus_three = Real::from(-3_i32);
+        assert_eq!((&pos % &minus_three).unwrap(), Real::from(1_i32));
+        assert_eq!((&neg % &minus_three).unwrap(), Real::from(-1_i32));
+    }
+
+    #[test]
+    fn rem_fractions() {
+        let a = Real::new(Rational::fraction(7, 2).unwrap());
+        let b = Real::new(Rational::fraction(1, 3).unwrap());
+        // 7/2 = 10 * (1/3) + 1/6
+        assert_eq!(
+            (&a % &b).unwrap(),
+            Real::new(Rational::fraction(1, 6).unwrap()),
+        );
+    }
+
+    #[test]
+    fn rem_zero_dividend() {
+        let zero = Real::zero();
+        let five = Real::from(5_i32);
+        assert_eq!((&zero % &five).unwrap(), Real::zero());
+    }
+
+    #[test]
+    fn rem_by_zero_is_error() {
+        let a = Real::from(5_i32);
+        let zero = Real::zero();
+        assert_eq!(&a % &zero, Err(Problem::DivideByZero));
+        assert_eq!(a % zero, Err(Problem::DivideByZero));
+    }
+
+    #[test]
+    fn rem_owned_matches_ref() {
+        let a = Real::new(Rational::fraction(22, 7).unwrap());
+        let b = Real::new(Rational::fraction(3, 2).unwrap());
+        let by_ref = (&a % &b).unwrap();
+        let by_value = (a % b).unwrap();
+        assert_eq!(by_ref, by_value);
+    }
+
+    #[test]
+    fn rem_same_irrational_class() {
+        // sqrt(2) % sqrt(2) = 0, since quotient is exactly 1 (rational).
+        let sqrt_two = Real::from(2_i32).sqrt().unwrap();
+        let other = Real::from(2_i32).sqrt().unwrap();
+        assert_eq!((&sqrt_two % &other).unwrap(), Real::zero());
+    }
+
+    #[test]
+    fn rem_irrational_multiple() {
+        // (3 * sqrt(2)) % sqrt(2) = 0 — quotient is rational 3.
+        let sqrt_two = Real::from(2_i32).sqrt().unwrap();
+        let three_sqrt_two = Real::from(3_i32) * &sqrt_two;
+        assert_eq!((&three_sqrt_two % &sqrt_two).unwrap(), Real::zero());
+    }
+
+    #[test]
+    fn rem_non_rational_quotient_errors() {
+        // sqrt(2) % sqrt(3) has irrational quotient — not exactly representable.
+        let sqrt_two = Real::from(2_i32).sqrt().unwrap();
+        let sqrt_three = Real::from(3_i32).sqrt().unwrap();
+        assert_eq!(&sqrt_two % &sqrt_three, Err(Problem::NotANumber));
+    }
+
+    #[test]
+    fn to_degrees_converts_pi_to_180() {
+        assert_eq!(Real::pi().to_degrees(), Real::from(180_i32));
+    }
+
+    #[test]
+    fn to_degrees_converts_tau_to_360() {
+        assert_eq!(Real::tau().to_degrees(), Real::from(360_i32));
+    }
+
+    #[test]
+    fn to_degrees_converts_half_pi_to_90() {
+        let half_pi = Real::pi() * Real::new(Rational::fraction(1, 2).unwrap());
+        assert_eq!(half_pi.to_degrees(), Real::from(90_i32));
+    }
+
+    #[test]
+    fn to_degrees_negative_pi_is_negative_180() {
+        assert_eq!((-Real::pi()).to_degrees(), Real::from(-180_i32));
+    }
+
+    #[test]
+    fn to_degrees_zero_is_zero() {
+        assert_eq!(Real::zero().to_degrees(), Real::zero());
+    }
+
+    #[test]
+    fn to_radians_converts_180_to_pi() {
+        assert_eq!(Real::from(180_i32).to_radians(), Real::pi());
+    }
+
+    #[test]
+    fn to_radians_converts_360_to_tau() {
+        assert_eq!(Real::from(360_i32).to_radians(), Real::tau());
+    }
+
+    #[test]
+    fn to_radians_converts_90_to_half_pi() {
+        let half_pi = Real::pi() * Real::new(Rational::fraction(1, 2).unwrap());
+        assert_eq!(Real::from(90_i32).to_radians(), half_pi);
+    }
+
+    #[test]
+    fn to_radians_negative_180_is_negative_pi() {
+        assert_eq!(Real::from(-180_i32).to_radians(), -Real::pi());
+    }
+
+    #[test]
+    fn to_radians_zero_is_zero() {
+        assert_eq!(Real::zero().to_radians(), Real::zero());
+    }
+
+    #[test]
+    fn degrees_radians_roundtrip_on_pi() {
+        assert_eq!(Real::pi().to_degrees().to_radians(), Real::pi());
+    }
+
+    #[test]
+    fn radians_degrees_roundtrip_on_180() {
+        assert_eq!(Real::from(180_i32).to_radians().to_degrees(), Real::from(180_i32));
+    }
+
+    #[test]
+    fn to_degrees_one_radian_falls_through_to_180_over_pi() {
+        // Class::One non-zero input bypasses the Pi fast path.
+        // 1 rad → 180/pi deg; multiplying back by pi must yield 180.
+        let degs = Real::from(1_i32).to_degrees();
+        assert_eq!(degs * Real::pi(), Real::from(180_i32));
+    }
+
+    #[test]
+    fn to_degrees_two_radians_falls_through() {
+        let degs = Real::from(2_i32).to_degrees();
+        assert_eq!(degs * Real::pi(), Real::from(360_i32));
+    }
+
+    #[test]
+    fn to_radians_pi_degrees_falls_through_to_pi_squared_over_180() {
+        // Class::Pi non-One input bypasses the One fast path.
+        // pi deg → pi*pi/180 rad; multiplying back by 180 must yield pi*pi.
+        let rads = Real::pi().to_radians();
+        assert_eq!(rads * Real::from(180_i32), Real::pi() * Real::pi());
+    }
+
+    #[test]
+    fn to_radians_tau_degrees_falls_through() {
+        let rads = Real::tau().to_radians();
+        assert_eq!(rads * Real::from(180_i32), Real::tau() * Real::pi());
+    }
+
+    #[test]
+    fn to_degrees_sqrt_roundtrip() {
+        // Class::Sqrt input — neither fast path applies; full Div + Mul dispatch.
+        let sqrt_two = Real::from(2_i32).sqrt().unwrap();
+        assert_eq!(sqrt_two.clone().to_degrees().to_radians(), sqrt_two);
+    }
+
+    #[test]
+    fn to_radians_sqrt_roundtrip() {
+        let sqrt_two = Real::from(2_i32).sqrt().unwrap();
+        assert_eq!(sqrt_two.clone().to_radians().to_degrees(), sqrt_two);
+    }
+
+    #[test]
+    fn to_degrees_one_radian_roundtrip() {
+        let one = Real::from(1_i32);
+        assert_eq!(one.clone().to_degrees().to_radians(), one);
+    }
+
+    #[test]
+    fn to_radians_pi_degrees_roundtrip() {
+        let pi = Real::pi();
+        assert_eq!(pi.clone().to_radians().to_degrees(), pi);
+    }
+
+    #[test]
+    fn to_degrees_negative_one_radian_falls_through() {
+        let degs = Real::from(-1_i32).to_degrees();
+        assert_eq!(degs * Real::pi(), Real::from(-180_i32));
+    }
+
+    #[test]
+    fn to_radians_negative_pi_degrees_falls_through() {
+        let rads = (-Real::pi()).to_radians();
+        assert_eq!(rads * Real::from(180_i32), -(Real::pi() * Real::pi()));
     }
 }

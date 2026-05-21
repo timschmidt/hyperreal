@@ -52,8 +52,8 @@ use std::sync::LazyLock;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Rational {
     sign: Sign,
-    numerator: BigUint,
-    denominator: BigUint,
+    pub(crate) numerator: BigUint,
+    pub(crate) denominator: BigUint,
 }
 
 static ONE: LazyLock<BigUint> = LazyLock::new(BigUint::one);
@@ -1019,22 +1019,37 @@ impl Rational {
         self.numerator.cmp(&self.denominator)
     }
 
-    /// The integer part of this Rational.
+    /// The integer part of this Rational, truncated toward zero.
     ///
-    /// Non integer rationals will thus be truncated towards zero
+    /// The denominator is replaced by one and the numerator becomes
+    /// `|numerator| / |denominator|` (BigUint integer division). The sign of
+    /// `self` is preserved, except when the integer quotient is zero — in that
+    /// case the result is [`Rational::zero`] so the unsigned-zero invariant
+    /// (no `Minus`-signed zero) is upheld even for inputs like `-1/2`.
+    ///
+    /// Integers and zero are returned unchanged via a fast path. Pair with
+    /// [`Rational::fract`] for the complementary fractional part (which keeps
+    /// the original sign), or with [`Rational::ceil`] for rounding away from
+    /// zero on positive non-integers.
     ///
     /// # Examples
     ///
+    /// Positive non-integer rounds toward zero:
     /// ```
     /// use hyperreal::Rational;
     /// let approx_pi = Rational::fraction(22, 7).unwrap();
-    /// let three = Rational::new(3);
-    /// assert_eq!(approx_pi.trunc(), three);
+    /// assert_eq!(approx_pi.trunc(), Rational::new(3));
     /// ```
     ///
-    /// The integer result can be converted to a primitive integer type
-    /// with suitable range
+    /// Negative non-integer also rounds toward zero (not floor):
+    /// ```
+    /// use hyperreal::Rational;
+    /// assert_eq!(Rational::fraction(-22, 7).unwrap().trunc(), Rational::new(-3));
+    /// assert_eq!(Rational::fraction(-1, 2).unwrap().trunc(), Rational::zero());
+    /// ```
     ///
+    /// The integer result can be converted to a primitive integer type with a
+    /// suitable range:
     /// ```
     /// use hyperreal::Rational;
     /// let fraction = Rational::new(172) / Rational::new(9);
@@ -1046,11 +1061,9 @@ impl Rational {
             return self.clone();
         }
         let n = &self.numerator / &self.denominator;
-        Self {
-            sign: self.sign,
-            numerator: n,
-            denominator: ONE.deref().clone(),
-        }
+        // Use from_fraction_parts so a zero quotient (e.g. trunc(-1/2)) collapses
+        // back to canonical [`Rational::zero`] instead of a Minus-signed zero.
+        Self::from_fraction_parts(self.sign, n, ONE.deref().clone())
     }
 
     /// The fractional part of this Rational.
@@ -1081,6 +1094,60 @@ impl Rational {
             sign: self.sign,
             numerator: n,
             denominator: self.denominator.clone(),
+        }
+    }
+
+    /// The smallest integer greater than or equal to `self`.
+    ///
+    /// Integers and zero are returned unchanged. For a positive non-integer the
+    /// magnitude is `floor(|self|) + 1` (computed via [`BigUint::div_ceil`]).
+    /// For a negative non-integer the magnitude is `floor(|self|)`, i.e. the
+    /// result is the truncation toward zero — `ceil(-1.5) = -1`, not `-2`.
+    ///
+    /// When that truncated magnitude collapses to zero (for example
+    /// `ceil(-1/2) = 0`), the unsigned-zero invariant of [`Rational`] is
+    /// preserved by returning [`Rational::zero`] rather than a `Minus`-signed
+    /// zero.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use hyperreal::Rational;
+    /// // Positive non-integer rounds up.
+    /// assert_eq!(Rational::fraction(22, 7).unwrap().ceil(), Rational::new(4));
+    /// // Negative non-integer rounds toward zero (i.e. up).
+    /// assert_eq!(Rational::fraction(-3, 2).unwrap().ceil(), Rational::new(-1));
+    /// // Negative magnitude under one collapses to unsigned zero.
+    /// assert_eq!(Rational::fraction(-1, 2).unwrap().ceil(), Rational::zero());
+    /// // Integers and zero are unchanged.
+    /// assert_eq!(Rational::new(-3).ceil(), Rational::new(-3));
+    /// assert_eq!(Rational::zero().ceil(), Rational::zero());
+    /// ```
+    pub fn ceil(self) -> Self {
+        use num::Integer;
+
+        if self.is_integer() {
+            return self;
+        }
+        match self.sign {
+            Plus => Self {
+                sign: Plus,
+                numerator: self.numerator.div_ceil(&self.denominator),
+                denominator: ONE.deref().clone(),
+            },
+            Minus => {
+                let q = &self.numerator / &self.denominator;
+                if q.is_zero() {
+                    Self::zero()
+                } else {
+                    Self {
+                        sign: Minus,
+                        numerator: q,
+                        denominator: ONE.deref().clone(),
+                    }
+                }
+            }
+            NoSign => unreachable!("zero is integer; handled by is_integer fast path"),
         }
     }
 
@@ -1940,6 +2007,26 @@ impl<T: AsRef<Rational>> Div<T> for Rational {
     }
 }
 
+impl Rem for &Rational {
+    type Output = Result<Rational, Problem>;
+
+    fn rem(self, rhs: Self) -> Self::Output {
+        if rhs.is_zero() {
+            Err(Problem::DivideByZero)
+        } else {
+            Ok((self / rhs).fract() * rhs)
+        }
+    }
+}
+
+impl<T: AsRef<Rational>> Rem<T> for Rational {
+    type Output = Result<Self, Problem>;
+
+    fn rem(self, rhs: T) -> Self::Output {
+        &self % rhs.as_ref()
+    }
+}
+
 impl Rational {
     fn definitely_equal(&self, other: &Self) -> bool {
         if self.sign != other.sign {
@@ -2574,5 +2661,110 @@ mod tests {
         // Source is zero: self is returned unchanged (no signed zero).
         assert_eq!(pos.clone().copysign(&Rational::zero()), pos);
         assert_eq!(neg.clone().copysign(&Rational::zero()), neg);
+    }
+
+    #[test]
+    fn ceil_rounds_positive_non_integer_up() {
+        assert_eq!(Rational::fraction(22, 7).unwrap().ceil(), Rational::new(4));
+        assert_eq!(Rational::fraction(1, 4).unwrap().ceil(), Rational::new(1));
+        assert_eq!(Rational::fraction(7, 7).unwrap().ceil(), Rational::new(1));
+    }
+
+    #[test]
+    fn ceil_rounds_negative_non_integer_toward_zero() {
+        // ceil(-1.5) = -1, NOT -2; this is the bug fix versus a naive div_ceil.
+        assert_eq!(Rational::fraction(-3, 2).unwrap().ceil(), Rational::new(-1));
+        assert_eq!(
+            Rational::fraction(-22, 7).unwrap().ceil(),
+            Rational::new(-3),
+        );
+    }
+
+    #[test]
+    fn ceil_of_negative_under_one_collapses_to_unsigned_zero() {
+        let result = Rational::fraction(-1, 2).unwrap().ceil();
+        assert_eq!(result, Rational::zero());
+        // Confirm the result is canonical zero, not a Minus-signed zero.
+        assert_eq!(result.sign(), Sign::NoSign);
+    }
+
+    #[test]
+    fn ceil_preserves_integers_and_zero() {
+        assert_eq!(Rational::new(5).ceil(), Rational::new(5));
+        assert_eq!(Rational::new(-3).ceil(), Rational::new(-3));
+        assert_eq!(Rational::zero().ceil(), Rational::zero());
+    }
+
+    #[test]
+    fn trunc_of_negative_under_one_collapses_to_unsigned_zero() {
+        // Regression: previously trunc could return a Minus-signed zero.
+        let result = Rational::fraction(-1, 2).unwrap().trunc();
+        assert_eq!(result, Rational::zero());
+        assert_eq!(result.sign(), Sign::NoSign);
+    }
+
+    #[test]
+    fn rem_integers() {
+        let seven = Rational::new(7);
+        let three = Rational::new(3);
+        assert_eq!((&seven % &three).unwrap(), Rational::new(1));
+        let twelve = Rational::new(12);
+        let four = Rational::new(4);
+        assert_eq!((&twelve % &four).unwrap(), Rational::zero());
+    }
+
+    #[test]
+    fn rem_sign_follows_dividend() {
+        let three = Rational::new(3);
+        let pos = Rational::new(7);
+        let neg = Rational::new(-7);
+        assert_eq!((&pos % &three).unwrap(), Rational::new(1));
+        assert_eq!((&neg % &three).unwrap(), Rational::new(-1));
+        let minus_three = Rational::new(-3);
+        assert_eq!((&pos % &minus_three).unwrap(), Rational::new(1));
+        assert_eq!((&neg % &minus_three).unwrap(), Rational::new(-1));
+    }
+
+    #[test]
+    fn rem_fractions() {
+        let a = Rational::fraction(7, 2).unwrap();
+        let b = Rational::fraction(1, 3).unwrap();
+        // 7/2 = 10 * (1/3) + 1/6
+        assert_eq!((&a % &b).unwrap(), Rational::fraction(1, 6).unwrap());
+        let c = Rational::fraction(5, 4).unwrap();
+        let d = Rational::fraction(1, 2).unwrap();
+        // 5/4 = 2 * (1/2) + 1/4
+        assert_eq!((&c % &d).unwrap(), Rational::fraction(1, 4).unwrap());
+    }
+
+    #[test]
+    fn rem_smaller_than_divisor_returns_dividend() {
+        let a = Rational::fraction(1, 3).unwrap();
+        let b = Rational::new(2);
+        assert_eq!((&a % &b).unwrap(), a);
+    }
+
+    #[test]
+    fn rem_divides_evenly_returns_zero() {
+        let a = Rational::fraction(9, 4).unwrap();
+        let b = Rational::fraction(3, 4).unwrap();
+        assert_eq!((&a % &b).unwrap(), Rational::zero());
+    }
+
+    #[test]
+    fn rem_by_zero_is_error() {
+        let a = Rational::new(5);
+        let zero = Rational::zero();
+        assert_eq!(&a % &zero, Err(Problem::DivideByZero));
+        assert_eq!(a % zero, Err(Problem::DivideByZero));
+    }
+
+    #[test]
+    fn rem_owned_matches_ref() {
+        let a = Rational::fraction(22, 7).unwrap();
+        let b = Rational::fraction(3, 2).unwrap();
+        let by_ref = (&a % &b).unwrap();
+        let by_value = (a % b).unwrap();
+        assert_eq!(by_ref, by_value);
     }
 }

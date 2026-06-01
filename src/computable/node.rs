@@ -4095,6 +4095,68 @@ impl Computable {
         self.signal = Some(s);
     }
 
+    /// A dyadic rational approximation of this Computable, with absolute error
+    /// at most `2^p` from the true value.
+    ///
+    /// Because [`approx`](Self::approx) returns the integer nearest to
+    /// `value * 2^(-p)` (error at most `±1` at that scale), the returned
+    /// rational `approx(p) * 2^p` lies within `±2^p` of the true value.
+    /// Negative `p` therefore requests a tighter approximation, matching the
+    /// sign convention used by [`approx`](Self::approx).
+    ///
+    /// Exact-rational leaves whose denominator is a power of two no larger
+    /// than `2^|p|` (with `p <= 0`) short-circuit and return their stored
+    /// value unchanged, skipping the approximation kernel entirely.
+    ///
+    /// Example: `7/8` is itself dyadic, so the result is exact once `p ≤ -3`.
+    /// ```
+    /// use hyperreal::{Computable, Rational};
+    /// let seven_eighths = Computable::rational(Rational::fraction(7, 8).unwrap());
+    /// assert_eq!(seven_eighths.approx_rational(-3), Rational::fraction(7, 8).unwrap());
+    /// ```
+    ///
+    /// Example: π scaled to 6 fractional bits is `201/64` (≈ `3.140625`).
+    /// ```
+    /// use hyperreal::{Computable, Rational};
+    /// let pi = Computable::pi();
+    /// assert_eq!(pi.approx_rational(-6), Rational::fraction(201, 64).unwrap());
+    /// ```
+    pub fn approx_rational(&self, p: Precision) -> Rational {
+        // `p.unsigned_abs()` avoids the `i32::MIN` overflow that `(-p) as u32`
+        // would hit, and unifies the shift width across both branches.
+        let shift = p.unsigned_abs();
+
+        // Structural fast path: an exact-rational leaf with a power-of-two
+        // denominator no larger than 2^|p| is already a valid dyadic answer at
+        // the requested precision, so return it without paying for an
+        // approximation kernel call, cache write, or fraction reduce.
+        if p <= 0 && let Some(exact) = self.exact_rational() {
+            let already_dyadic = exact.sign() == Sign::NoSign
+                || exact.dyadic_denominator_shift().is_some_and(|tz| tz <= u64::from(shift));
+            if already_dyadic {
+                return exact;
+            }
+        }
+
+        let val = self.approx(p);
+        if p >= 0 {
+            Rational::from_bigint(val << shift)
+        } else {
+            // Strip common factors of 2 between numerator and 2^shift so the
+            // subsequent `reduce()` finds gcd == 1 and skips the generic
+            // binary-gcd loop. The result is mathematically identical.
+            let val_tz = val
+                .magnitude()
+                .trailing_zeros()
+                .unwrap_or(0)
+                .min(u64::from(shift));
+            let strip = u32::try_from(val_tz).expect("shift fits in u32");
+            let denominator = BigUint::one() << (shift - strip);
+            Rational::from_bigint_fraction(val >> strip, denominator)
+                .expect("2^k is never zero")
+        }
+    }
+
     /// An approximation of this Computable scaled to a specific precision.
     ///
     /// Since the value is scaled, the approximation is roughly `value * 2^p`.
@@ -5996,5 +6058,74 @@ mod tests {
         let forty: BigInt = "40".parse().unwrap();
         let b = scale(ten.clone(), 2);
         assert_eq!(forty, b);
+    }
+
+    #[test]
+    fn approx_rational_integer_at_zero_precision() {
+        let nine = Computable::integer(BigInt::from(9));
+        assert_eq!(nine.approx_rational(0), Rational::new(9));
+    }
+
+    #[test]
+    fn approx_rational_dyadic_is_exact_at_sufficient_precision() {
+        let seven_eighths = Computable::rational(Rational::fraction(7, 8).unwrap());
+        assert_eq!(
+            seven_eighths.approx_rational(-3),
+            Rational::fraction(7, 8).unwrap()
+        );
+        // Tighter precision still produces the same exact dyadic value.
+        assert_eq!(
+            seven_eighths.approx_rational(-10),
+            Rational::fraction(7, 8).unwrap()
+        );
+    }
+
+    #[test]
+    fn approx_rational_pi_matches_known_dyadic_truncation() {
+        // pi.approx(-6) = round(pi * 64) = 201, so the rational is 201/64.
+        let pi = Computable::pi();
+        assert_eq!(
+            pi.approx_rational(-6),
+            Rational::fraction(201, 64).unwrap()
+        );
+    }
+
+    #[test]
+    fn approx_rational_within_error_bound_for_pi() {
+        // Contract: |result - value| <= 2^p. Use a 32-bit reference for value.
+        let pi = Computable::pi();
+        let approx = pi.approx_rational(-16);
+        let reference =
+            Rational::from_bigint_fraction(pi.approx(-32), BigUint::one() << 32_u32).unwrap();
+        let diff = approx - reference;
+        let bound =
+            Rational::from_bigint_fraction(BigInt::one(), BigUint::one() << 16_u32).unwrap();
+        let neg_bound = -bound.clone();
+        assert!(
+            diff >= neg_bound && diff <= bound,
+            "pi error {diff:?} outside ±{bound:?}"
+        );
+    }
+
+    #[test]
+    fn approx_rational_positive_p_scales_up() {
+        // approx(9, 2) rounds 9/4 to 2, so the returned rational is 2 * 2^2 = 8.
+        let nine = Computable::integer(BigInt::from(9));
+        assert_eq!(nine.approx_rational(2), Rational::new(8));
+    }
+
+    #[test]
+    fn approx_rational_zero_at_any_precision() {
+        let zero = Computable::rational(Rational::zero());
+        assert_eq!(zero.approx_rational(-32), Rational::zero());
+        assert_eq!(zero.approx_rational(0), Rational::zero());
+        assert_eq!(zero.approx_rational(8), Rational::zero());
+    }
+
+    #[test]
+    fn approx_rational_negative_integer_preserves_sign() {
+        let neg_five = Computable::integer(BigInt::from(-5));
+        assert_eq!(neg_five.approx_rational(0), Rational::new(-5));
+        assert_eq!(neg_five.approx_rational(-4), Rational::new(-5));
     }
 }

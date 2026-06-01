@@ -7,6 +7,7 @@ use crate::{
     SymbolicDependencyMask, SymbolicFacts, ZeroKnowledge, ZeroOneMinusOneStatus, ZeroOneStatus,
 };
 use core::cmp::Ordering;
+use std::borrow::Cow;
 use num::ToPrimitive;
 use num::bigint::{BigInt, BigUint, Sign};
 #[cfg(feature = "serde")]
@@ -1321,6 +1322,78 @@ impl Real {
             One => Some(&self.rational),
             _ => None,
         }
+    }
+
+    /// Return the stored exact rational when this value is `One`-class, or a
+    /// dyadic rational approximation `r` such that `|r - self| <= 2^p`.
+    ///
+    /// The precision convention matches [`Computable::approx_rational`]: `p`
+    /// is the binary place at which the rounding error is bounded, so `p = 0`
+    /// rounds to the nearest integer and `p = -10` rounds to roughly three
+    /// fractional decimal digits. Negative `p` requests a tighter answer.
+    ///
+    /// Skips the approximation kernel whenever [`exact_rational`] would have
+    /// answered, and propagates the dyadic-leaf short-circuit inside
+    /// `approx_rational` when the underlying [`Computable`] is itself an
+    /// already-dyadic leaf. Callers that hold `&self` should prefer
+    /// [`exact_rational_or_approx_ref`] to avoid cloning the exact rational.
+    ///
+    /// ```
+    /// use hyperreal::{Real, Rational};
+    /// let half = Real::new(Rational::fraction(1, 2).unwrap());
+    /// assert_eq!(half.exact_rational_or_approx(-32), Rational::fraction(1, 2).unwrap());
+    /// // π scaled to 6 fractional bits is 201/64.
+    /// assert_eq!(Real::pi().exact_rational_or_approx(-6), Rational::fraction(201, 64).unwrap());
+    /// ```
+    ///
+    /// [`exact_rational`]: Self::exact_rational
+    /// [`exact_rational_or_approx_ref`]: Self::exact_rational_or_approx_ref
+    pub fn exact_rational_or_approx(self, p: i32) -> Rational {
+        match self.class {
+            One => {
+                crate::trace_dispatch!("real", "exact-rational-or-approx", "exact-owned");
+                self.rational
+            }
+            _ => {
+                crate::trace_dispatch!("real", "exact-rational-or-approx", "approx-owned");
+                self.into_computable().approx_rational(p)
+            }
+        }
+    }
+
+    /// Borrowed-receiver counterpart of [`exact_rational_or_approx`].
+    ///
+    /// Returns `Cow::Borrowed` of the stored rational when this value is
+    /// `One`-class, and `Cow::Owned` of a dyadic approximation otherwise. The
+    /// approximation reuses the existing [`Computable`] payload when present
+    /// and falls back to the class's symbolic certificate (e.g. `Pi`, `Sqrt`)
+    /// when this `Real` carries only its class tag. Callers iterating over a
+    /// mixed slice of exact-rational and symbolic scalars can therefore batch
+    /// rational work without cloning the exact lanes.
+    ///
+    /// ```
+    /// use std::borrow::Cow;
+    /// use hyperreal::{Real, Rational};
+    /// let half = Real::new(Rational::fraction(1, 2).unwrap());
+    /// assert!(matches!(half.exact_rational_or_approx_ref(-32), Cow::Borrowed(_)));
+    /// let pi = Real::pi();
+    /// let pi_approx = pi.exact_rational_or_approx_ref(-6);
+    /// assert!(matches!(pi_approx, Cow::Owned(_)));
+    /// assert_eq!(*pi_approx, Rational::fraction(201, 64).unwrap());
+    /// ```
+    ///
+    /// [`exact_rational_or_approx`]: Self::exact_rational_or_approx
+    pub fn exact_rational_or_approx_ref(&self, p: i32) -> Cow<'_, Rational> {
+        if let Some(r) = self.exact_rational_ref() {
+            crate::trace_dispatch!("real", "exact-rational-or-approx-ref", "exact-borrowed");
+            return Cow::Borrowed(r);
+        }
+        crate::trace_dispatch!("real", "exact-rational-or-approx-ref", "approx-owned");
+        let approx = match self.computable.as_ref() {
+            Some(c) => c.approx_rational(p),
+            None => self.class.computable_certificate().approx_rational(p),
+        };
+        Cow::Owned(approx)
     }
 
     #[inline]
@@ -6417,6 +6490,44 @@ mod tests {
 
         let stddev = Real::sample_stddev(&values).unwrap();
         assert_eq!(stddev, Real::from(4_i32).sqrt().unwrap());
+    }
+
+    #[test]
+    fn exact_rational_or_approx_returns_stored_rational_unchanged() {
+        let seven_eighths = Rational::fraction(7, 8).unwrap();
+        let real = Real::new(seven_eighths.clone());
+        assert_eq!(real.clone().exact_rational_or_approx(0), seven_eighths);
+        // Precision argument is ignored on the One-class fast path.
+        assert_eq!(real.exact_rational_or_approx(64), seven_eighths);
+    }
+
+    #[test]
+    fn exact_rational_or_approx_approximates_irrational_at_requested_scale() {
+        // π scaled to 6 fractional bits is 201/64 (see Computable::approx_rational docs).
+        let approx = Real::pi().exact_rational_or_approx(-6);
+        assert_eq!(approx, Rational::fraction(201, 64).unwrap());
+    }
+
+    #[test]
+    fn exact_rational_or_approx_ref_borrows_exact_rational_without_cloning() {
+        let half = Rational::fraction(1, 2).unwrap();
+        let real = Real::new(half.clone());
+        let borrowed = real.exact_rational_or_approx_ref(-32);
+        match borrowed {
+            Cow::Borrowed(inner) => {
+                assert_eq!(*inner, half);
+                assert!(std::ptr::eq(inner, real.exact_rational_ref().unwrap()));
+            }
+            Cow::Owned(_) => panic!("exact-rational receiver must yield Cow::Borrowed"),
+        }
+    }
+
+    #[test]
+    fn exact_rational_or_approx_ref_owns_dyadic_approximation_for_irrational() {
+        let pi = Real::pi();
+        let pi_approx = pi.exact_rational_or_approx_ref(-6);
+        assert!(matches!(pi_approx, Cow::Owned(_)));
+        assert_eq!(*pi_approx, Rational::fraction(201, 64).unwrap());
     }
 
     #[test]

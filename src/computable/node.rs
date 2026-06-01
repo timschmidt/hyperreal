@@ -4129,13 +4129,8 @@ impl Computable {
         // the requested precision, so return it without paying for an
         // approximation kernel call, cache write, or fraction reduce.
         if p <= 0 && let Some(exact) = self.exact_rational() {
-            let already_dyadic = exact.sign() == Sign::NoSign || {
-                let denominator = exact.denominator();
-                let tz = denominator
-                    .trailing_zeros()
-                    .expect("Rational denominators are never zero");
-                tz + 1 == denominator.bits() && tz <= u64::from(shift)
-            };
+            let already_dyadic = exact.sign() == Sign::NoSign
+                || exact.dyadic_denominator_shift().is_some_and(|tz| tz <= u64::from(shift));
             if already_dyadic {
                 return exact;
             }

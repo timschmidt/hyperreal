@@ -7,6 +7,7 @@ use crate::{
     SymbolicDependencyMask, SymbolicFacts, ZeroKnowledge, ZeroOneMinusOneStatus, ZeroOneStatus,
 };
 use core::cmp::Ordering;
+use std::borrow::Cow;
 use num::ToPrimitive;
 use num::bigint::{BigInt, BigUint, Sign};
 
@@ -1313,6 +1314,25 @@ impl Real {
         match self.class {
             One => Some(&self.rational),
             _ => None,
+        }
+    }
+
+    pub fn exact_rational_or_approx(self, p: i32) -> Rational {
+        match self.class {
+            One => self.rational,
+            _ => self.into_computable().approx_rational(p),
+        }
+    }
+
+    pub fn exact_rational_or_approx_ref(&self, p: i32) -> Cow<'_, Rational> {
+        match self.exact_rational_ref() {
+            Some(r) => Cow::Borrowed(r),
+            None => Cow::Owned(
+                match self.computable.as_ref() {
+                    Some(c) => c.approx_rational(p),
+                    None => self.class.computable_certificate().approx_rational(p),
+                }
+            ),
         }
     }
 
